@@ -3,74 +3,66 @@ include("layers.jl")
 """
 EmissionNet calculates the next location given the current state
     consists of an fc layer
+    activation function is identity (may be tanh too?)
 """
 struct EmissionNet
     d::Dense
 end
 (e::EmissionNet)(x) = e.d(x)
-EmissionNet(i::Int) = EmissionNet(Dense(i, 2))
+EmissionNet(i::Int) = EmissionNet(Dense(i, 2, identity))
 
 """
 ClassificationNet returns the softmax output for the labels
     consist of an fc layer and a softmax output layer
+    hidden size is determined by the kind of experiment
 """
 struct ClassificationNet
     d::Dense
+    o::Dense
 end
-(c::ClassificationNet)(x) = exp.(d(x))
-ClassificationNet(i::Int, o::Int) = ClassificationNet(Dense(i, o))
+(c::ClassificationNet)(x) = c.o(c.d(x))
+ClassificationNet(i::Int, o::Int) = ClassificationNet(Dense(i, hidden_size), Dense(hidden_size, o))
 
 """
 GlimpseNet
     
 """
-struct GlimpseNet
+struct GlimpseNetDRAM
     imagechain::Chain
     locationlayer::Dense
 
-    GlimpseNet(weightsize, channelsize, outsize, patchsize) = (
+    GlimpseNetDRAM(weightsize, channelsize, outsize, patchsize) = (
     # calculate image dense layer size
-    d = (patchsize - sum(weightsize, dims=1) .+3);
-    densein = d[1] * d[2] * channelsize[3];
+    d = (patchsize .- sum(weightsize, dims=1) .+3);
+    densein = d[1] * d[2] * channelsize[4];
     
     new(Chain(
-        Conv(weightsize[1,1], weightsize[1,2], 1, channelsize[1]),
-        Conv(weightsize[2,1], weightsize[2,2], channelsize[1], channelsize[2]),
-        Conv(weightsize[3,1], weightsize[3,2], channelsize[2], channelsize[3]),
-        Dense(densein, outsize)),   # end of chain (for image)
+        Conv(weightsize[1,1], weightsize[1,2], channelsize[1], channelsize[2]),
+        Conv(weightsize[2,1], weightsize[2,2], channelsize[2], channelsize[3]),
+        Conv(weightsize[3,1], weightsize[3,2], channelsize[3], channelsize[4]),
+        Dense(densein, outsize)),    # end of chain (for image)
         Dense(2, outsize))           # for location
     )
    
 end
-(g::GlimpseNet)(x, l) = g.imagechain(x) .* g.locationlayer(l)
+(g::GlimpseNetDRAM)(x, l) = g.imagechain(x) .* g.locationlayer(l)
 
-#= function  GlimpseNet(weightsize, channelsize, outsize, patchsize)
-    # calculate image dense layer size
-    [d1, d2] = (patchsize - sum(weightsize, dims=1) .+3) * channelsize[3]
-    densein = d1*d2
-    
-    return GlimpseNet(Chain(
-        Conv(weightsize[1,1], weightsize[1,2], 1, channelsize[1]),
-        Conv(weightsize[2,1], weightsize[2,2], channelsize[1], channelsize[2]),
-        Conv(weightsize[3,1], weightsize[3,2], channelsize[2], channelsize[3]),
-        Dense(densein, outsize)),   # end of chain (for image)
-        Dense(2, outsize)           # for location
+"""
+GlimpseNet used in RAM model
+    mnih et al 2014
+"""
+struct GlimpseNetRAM
+    denseglimpse::Dense
+    denselocation::Dense
+    densecommon::Dense
+
+    GlimpseNetRAM(patchwidth, channelsize) = (
+        new(Dense(patchwidth*patchwidth*channelsize, 128),
+            Dense(2, 128),
+            Dense(256, 256)
+        )
     )
-end =#
-
-wsize = [5 5; 3 3; 3 3]
-csize = [64 64 128]
-outsize = 100;
-patchsize = [10 20]
-
-glimpsenet = GlimpseNet(wsize, csize, outsize, patchsize)
-
-for i=1:1000
-    image = rand(10, 20)
-    image4 = convert(atype, (reshape(image, (size(image)[1], size(image)[2], 1, 1))))
-
-    loc = rand(Float64, 2)
-    loc4 = convert(atype, (reshape(loc, (2, 1, 1, 1))))
-
-    g = glimpsenet(image4, loc4)
+end
+function (g::GlimpseNetRAM)(x, l)
+    g.densecommon(cat(g.denseglimpse(x), g.denselocation(l), dims=1))
 end
