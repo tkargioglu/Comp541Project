@@ -7,7 +7,7 @@ Conv(w1::Int, w2::Int, cx::Int, cy::Int, f=relu; pdrop=0) = Conv(param(w1,w2,cx,
 
 # dense layer
 struct Dense; w; b; f; p; end
-(d::Dense)(x) = (d.f.(d.w * mat(dropout(x,d.p)) .+ d.b)) # mat reshapes 4-D tensor to 2-D matrix so we can use matmul
+(d::Dense)(x) = (if length(size(x)) == 2 fun=identity; else fun=mat; end; d.f.(d.w * fun(dropout(x,d.p)) .+ d.b)) # mat reshapes 4-D tensor to 2-D matrix so we can use matmul
 Dense(i::Int, o::Int, f=relu; pdrop=0) = Dense(param(o,i), param0(o), f, pdrop)
 
 #=

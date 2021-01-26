@@ -7,9 +7,10 @@ EmissionNet calculates the next location given the current state
 """
 struct EmissionNet
     d::Dense
+    σ
 end
-(e::EmissionNet)(x) = e.d(x)
-EmissionNet(i::Int) = EmissionNet(Dense(i, 2, identity))
+(e::EmissionNet)(x) = (μ = e.d(x); loc = randn()*e.σ.+μ; return μ, loc)
+EmissionNet(i::Int, sigma=0.03) = EmissionNet(Dense(i, 2, identity), sigma)
 
 """
 ClassificationNet returns the softmax output for the labels
@@ -24,8 +25,8 @@ end
 ClassificationNet(i::Int, o::Int) = ClassificationNet(Dense(i, hidden_size), Dense(hidden_size, o))
 
 """
-GlimpseNet
-    
+GlimpseNet used in DRAM model
+    ba et al 2015
 """
 struct GlimpseNetDRAM
     imagechain::Chain
@@ -47,6 +48,26 @@ struct GlimpseNetDRAM
 end
 (g::GlimpseNetDRAM)(x, l) = g.imagechain(x) .* g.locationlayer(l)
 
+
+"""
+GlimpseNet used in DRAM model for MNIST classification
+    ba et al 2015
+"""
+struct GlimpseNetDRAM_v1
+    imagelayer::Dense
+    locationlayer::Dense
+
+    GlimpseNetDRAM_v1(patchwidth, channelsize, outsize) = (
+      
+        new(Dense(patchwidth*patchwidth*channelsize, outsize),      # for images
+            Dense(2, outsize)                                       # for location
+        )
+    )
+   
+end
+(g::GlimpseNetDRAM_v1)(x, l) = g.imagelayer(x) .* g.locationlayer(l)
+
+
 """
 GlimpseNet used in RAM model
     mnih et al 2014
@@ -63,6 +84,13 @@ struct GlimpseNetRAM
         )
     )
 end
-function (g::GlimpseNetRAM)(x, l)
-    g.densecommon(cat(g.denseglimpse(x), g.denselocation(l), dims=1))
+(g::GlimpseNetRAM)(x, l) = g.densecommon(cat(g.denseglimpse(x), g.denselocation(l), dims=1))
+
+"""
+"""
+struct ContextNetDRAM_v1
+    dense::Dense
+
+    ContextNetDRAM_v1(insize, outsize) = new(Dense(insize, outsize))
 end
+(c::ContextNetDRAM_v1)(x) = c.dense(x)

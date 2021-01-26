@@ -17,24 +17,25 @@ Recurrent Attention Model. Mnih et al. 2014
 """
 struct RAM
     glimpsenet::GlimpseNetRAM       
-    rnnlower::RNN
-    rnnupper::RNN 
+    rnn::RNN
     emissionnet::EmissionNet
     classificationnet::ClassificationNet
     baselinenet::Dense
+    σ
 end
 function RAM(   patchwidth::Int,             # width (and height) of the patches
                 glimpselength::Int,          # length of the glimpse feature vector produced by the glimpseNet
                 hiddensize::Int,             # length of the hidden state vector of the lstms
                 batchsize::Int,
-                csize)                       # channel sizes of conv layers in glimpse network
+                csize,                       # channel sizes of conv layers in glimpse network
+                sigma=0.03)
                     
     result = RAM(   GlimpseNetRAM(patchwidth, csize[1]),
                     RNN(glimpselength, hiddensize),
-                    RNN(hiddensize, hiddensize),
-                    EmissionNet(hiddensize),
+                    EmissionNet(hiddensize, sigma),
                     ClassificationNet(hiddensize, 10),
-                    Dense(hiddensize, 1, identity))
+                    Dense(hiddensize, 1, identity),
+                    sigma)
 
     result
 end
@@ -42,142 +43,168 @@ end
 (ram::RAM)(x)       = ramforward(ram, x)
 # (ram::RAM)(x, y)    = NLL(ram(x), y)
 # (ram::RAM)(data::Data) = mean(ram(x,y) for (x,y) in data)
-(ram::RAM)(x, y)        = ramforwardgetloss(ram, x, y)
-(ram::RAM)(data::Data)  = mean(ram(x,y) for (x,y) in data)
+#(ram::RAM)(x, y)        = ramforwardgetloss(ram, x, y)
+#(ram::RAM)(data::Data)  = mean(ram(x,y) for (x,y) in data)
 
-losses = Any[]
+"""
+run for one episode
+    return loss
+"""
+function ramforward(ram::RAM, images, deterministic::Bool=false)
 
-str=""
-"""
-Forward pass of RAM for a given minibatch of images
-    used in testing not training
-    returns scores
-"""
-function ramforward(ram::RAM, x)
-            
-    s = size(x)
+    # if there is no channel dimension make them single channel
+    s = size(images)
     if length(s) == 3
-        x = reshape(x, s[1], s[2], 1, s[3])
+        images = reshape(images, s[1], s[2], 1, s[3])
     end
 
-    batchsize = size(x)[4]
+    batchsize = size(images)[4]
 
     # locations at the first glimpse are random
     loc = convert(atype, randn(2, batchsize))
+    
+    # initializing hidden state of the rnn
+    ram.rnn.h = Param(convert(atype, randn(rnn_hidden_size, batchsize, 1)))
 
-    ram.rnnlower.h = Param(convert(atype, randn(rnn_hidden_size, batchsize, 1)))
-    ram.rnnupper.h = Param(convert(atype, randn(rnn_hidden_size, batchsize, 1)))
+    logπs, baselines, locations = [], [], Any[loc]
 
-    local r1
-
-    # 8 glimpses for each image
+    r = Any
+    # loop over glimpses
     for i=1:numglimpses
 
         loc4 = reshape(loc, 2, 1, 1, batchsize)
-        locsum = convert(atype, zeros(2, batchsize))
 
-        # multiple markov sampling in each glimpse
-        for j=1:num_markov_sampling
+        # get glimpses for the batch as a batch (patchsize x patchsize x numscale x batchsize)
+        g = take_glimpses(images, loc, patchwidth, numscales, unit_width_as_pixels)
+        
+        # get glimpse feature vector (glimpselength)
+        glimpsefeature = ram.glimpsenet(g, loc4)
 
-            # markov sampling of location
-            lm = convert(atype, randn(2, batchsize)) * markov_sigma + loc
+        # hidden state of the lstm (hiddensize)
+        r = ram.rnn(glimpsefeature)
 
-            # get glimpses for the batch as a batch (patchsize x patchsize x numscale x batchsize)
-            g = take_glimpses(x, lm, patchwidth, numscales, unit_width_as_pixels)
-            
-            # get glimpse feature vector (glimpselength)
-            glimpsefeature = ram.glimpsenet(g, loc4)
+        # new location
+        μ, loc = ram.emissionnet(r)
 
-            # r1 r2 hidden states of the lstms (hiddensize)
-            r1 = ram.rnnlower(glimpsefeature)
-            r2 = ram.rnnupper(r1)
+        # baseline for this timestep
+        baseline = ram.baselinenet(value(r))
+        
+        σ = ram.σ
+        logπ = -(abs.(loc - μ) .^ 2) / 2σ*σ .- log(σ) .- log(√(2π))
+        logπ = sum(logπ, dims=1)
 
-            # get location (2)
-            locsum += ram.emissionnet(r2)
+        if deterministic
+            loc = μ
         end
-        loc = locsum ./ num_markov_sampling
+
+        push!(locations, loc)
+        push!(baselines, baseline)
+        push!(logπs, logπ)
     end
 
-    # numclasses x batchsize
-    ram.classificationnet(r1)
+    baseline, logπ = vcat(baselines...), vcat(logπs...)
+    
+    # scores: numclasses x batchsize
+    scores = ram.classificationnet(r)
+
+    return scores, baseline, logπ, locations
 end
 
-"""
-"""
-function ramforwardgetloss(ram::RAM, x, y)
+function getloss(ram::RAM, x, y::Union{Array{Int64}, Array{UInt8}}, deterministic=false)
     
-    s = size(x)
-    if length(s) == 3
-        x = reshape(x, s[1], s[2], 1, s[3])
+    etype = eltype(ram)
+
+    M = 8
+    losses = []
+    correct = 0
+    total = 0
+    # monte carlo sampling
+    for i =1:M
+        scores, baseline, logπ, locations = ramforward(ram, x, deterministic)
+
+        ŷ = vec(map(i->i[1], argmax(Array(value(scores)), dims=1)))     
+        r = ŷ .== y;
+        r = reshape(r, 1, length(r))
+        R = convert(KnetArray{Float32}, r)
+        R̂ = R .- value(baseline)
+        loss_action = NLL(scores, y)
+        loss_baseline = sum(abs2, baseline .- R) / length(baseline)
+        loss_reinforce = mean(sum(-logπ .* R̂, dims=1))
+        push!(losses, loss_action + loss_baseline + loss_reinforce)
+        correct += sum(r)
+        total += length(r)
     end
 
-    batchsize = size(x)[4]
+    loss = sum(losses) / M
+    correct = correct / M
+    total = total / M
 
-    # locations at the first glimpse are random
-    loc = convert(atype, randn(2, batchsize))
+    return loss, correct, total
+end
+loss(ram::RAM, x, ygold) = getloss(ram, x,ygold)[1]
+loss(ram::RAM, d::Data) = mean(getloss(ram, x,y)[1] for (x,y) in d)
 
-    ram.rnnlower.h = Param(convert(atype, randn(rnn_hidden_size, batchsize, 1)))
-    ram.rnnupper.h = Param(convert(atype, randn(rnn_hidden_size, batchsize, 1)))
 
-    local r1, r2, F1, F2, baseline
+function train()
 
-    baseline=0
-    F1=0 
-    F2=0
+    xtrn,ytrn = MNIST.traindata(Float32); ytrn[ytrn.==0] .= 10
+    xtst,ytst = MNIST.testdata(Float32);  ytst[ytst.==0] .= 10
+    dtrn = minibatch(xtrn, ytrn, batchsize; xtype = atype)
+    dtst = minibatch(xtst, ytst, batchsize; xtype = atype)
+    ram = RAM(8, 256, 256, batchsize, 2)
+    
+    bestmodel_path = string("./best.jld2")
+    lastmodel_path = string("./last.jld2")
+    history = []
+    bestacc = 0.0
+    
+    trn_losses, trn_acc = validate(ram, dtrn)
+    tst_losses, tst_acc = validate(ram, dtst)
+    println(
+        "epoch=$(length(history)) ",
+        "trnloss=$(trn_losses), trnacc=$trn_acc, ",
+        "tstloss=$(tst_losses), tstacc=$tst_acc")
+    push!(history, ([trn_losses..., trn_acc, tst_losses..., tst_acc]))
 
-    # multiple glimpses for each image
-    for i=1:numglimpses
+    loss(x, ygold) = getloss(ram, x, ygold)[1]
+    for epoch = 1:100
+        progress!(sgd(loss, dtrn))
 
-        loc4 = reshape(loc, 2, 1, 1, batchsize)
-        locsum = convert(atype, zeros(2, batchsize))
+        trn_losses, trn_acc = validate(ram, dtrn)
+        tst_losses, tst_acc = validate(ram, dtst)
+        println(
+            "epoch=$(length(history)) ",
+            "trnloss=$(trn_losses), trnacc=$trn_acc, ",
+            "tstloss=$(tst_losses), tstacc=$tst_acc")
+        push!(history, ([trn_losses..., trn_acc, tst_losses..., tst_acc]))
+        
+        Knet.save(lastmodel_path, "model", ram, "history", history)
 
-        # multiple markov sampling in each glimpse
-        for j=1:num_markov_sampling
-
-            # markov sampling of location
-            lm = convert(atype, randn(2, batchsize)) * markov_sigma + loc
-
-            # get glimpses for the batch as a batch (patchsize x patchsize x numscale x batchsize)
-            g = take_glimpses(x, lm, patchwidth, numscales, unit_width_as_pixels)
-            
-            # get glimpse feature vector (glimpselength)
-            glimpsefeature = ram.glimpsenet(g, loc4)
-
-            # r1 r2 hidden states of the lstms (hiddensize)
-            r1 = ram.rnnlower(glimpsefeature)
-            r2 = ram.rnnupper(r1)
-
-            # get location (2)
-            locsum += ram.emissionnet(r2)
-            
-            F1 += NLL(ram.classificationnet(r1), y) / num_markov_sampling
-
-            # gaussian
-            f = exp.(-((lm-loc)/markov_sigma).^2/2)/(markov_sigma*sqrt(2*pi))
-            F2 += f[1] * f[2] / num_markov_sampling
+        if tst_acc > bestacc
+            bestacc = tst_acc
+            Knet.save(bestmodel_path, "model", ram, "history", history)
         end
-        loc = locsum ./ num_markov_sampling
-        baseline += ram.baselinenet(r2)[1][1]
     end
+end
 
-    # reward 0 or 1 (batchsize)
-    R = zeros(batchsize)
-    for k=1:batchsize
-        res = ram.classificationnet(r1)
-        R[k] = argmax(res[:, k]) == y[k]
+function validate(ram::RAM, data; deterministic=false)
+    loss = 0
+    ncorrect = ninstances = 0
+    for (x,y) in data
+        ret = getloss(ram, x, y, deterministic)
+        loss += ret[1]
+        ncorrect += ret[2]
+        ninstances += ret[3]
     end
-    
-    # R = (first.(Tuple.(argmax(ram.classificationnet(r1), dims=1))))' .== y
-
-    baseline = baseline/numglimpses
-
-    # loss
-    mean(F1 .- (R.-baseline/numglimpses)*F2 .+ sum(abs2.(R.-baseline)))
+    loss = loss / length(data)
+    loss = [sum(loss), loss...]
+    return loss, ncorrect / ninstances
 end
 
 #=
 # test
-using Knet, MLDatasets: MNIST
+using Knet
+using MLDatasets: MNIST
 
 batchsize = 128
 # get mnist data
@@ -185,8 +212,10 @@ xtrn,ytrn = MNIST.traindata(Float32); ytrn[ytrn.==0] .= 10
 xtst,ytst = MNIST.testdata(Float32);  ytst[ytst.==0] .= 10
 dtrn = minibatch(xtrn, ytrn, batchsize; xtype = atype)
 dtst = minibatch(xtst, ytst, batchsize; xtype = atype)
-println.(summary.((dtrn,dtst)));
-x,y = first(dtst)
+ram = RAM(8, 256, 256, batchsize, 2)
+progress!(sgd(ram, ncycle(dtrn,50)))
+
+
 ram = RAM(8, 256, 256, batchsize, 2)
 
 ramforwardgetloss(ram, x, y)
@@ -221,7 +250,7 @@ y = 1
 n = NLL(scores, y)
 summary(n)
 =#
-
+#=
 function runOneGlimpseGetLocation(ram::RAM, image, loc)
       
     loc     = convert(atype, loc)
@@ -240,7 +269,9 @@ function runOneGlimpseGetLocation(ram::RAM, image, loc)
     # get location (2)
     ram.emissionnet(r2)
 end
+=#
 
+#=
 function runOneGlimpseGetPrediction(ram::RAM, image, loc)
 
     loc     = convert(atype, loc)
@@ -259,6 +290,8 @@ function runOneGlimpseGetPrediction(ram::RAM, image, loc)
     # predicted label
     ram.classificationnet(r1)
 end
+=#
+
 #=
 # test
 atype           = KnetArray{Float32}            # use gpu arrays
@@ -302,3 +335,21 @@ struct DRAM
 
 end
 =#
+
+#=
+# test
+using Knet
+using MLDatasets: MNIST
+
+batchsize = 128
+# get mnist data
+xtrn,ytrn = MNIST.traindata(Float32); ytrn[ytrn.==0] .= 10
+xtst,ytst = MNIST.testdata(Float32);  ytst[ytst.==0] .= 10
+dtrn = minibatch(xtrn, ytrn, batchsize; xtype = atype)
+dtst = minibatch(xtst, ytst, batchsize; xtype = atype)
+ram = RAM(8, 256, 256, batchsize, 2)
+progress!(sgd(ram, ncycle(dtrn,50)))
+
+=#
+
+train()
