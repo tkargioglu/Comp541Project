@@ -1,1 +1,3 @@
-# Comp541Project
+# DRAM (Deep Recurrent Attention Model)
+
+Ba et al
