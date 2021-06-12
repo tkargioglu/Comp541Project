@@ -53,6 +53,7 @@ using MLDatasets: MNIST
 using Knet
 
 """
+Generate images containing 2 digits randomly picked from MNIST
 """
 function preprocess_mnist(outputdir, outdim=100)
 
@@ -124,6 +125,7 @@ function preprocess_mnist(outputdir, outdim=100)
 end
 
 """
+Generate images containing 2 digits randomly picked from MNIST
 """
 function preprocess_mnist_2(outputdir; outdim=100, crop=6)
 
@@ -219,6 +221,10 @@ function preprocess_mnist_2(outputdir; outdim=100, crop=6)
     @save outputdir xtrn ytrn xtst ytst
 end
 
+"""
+Save SVHN data in easily usable format
+    Get SVHN data from .mat file into jld2 files
+"""
 function svhnjld(datadir::String, imagedir::String, outputdir::String)
     xtrn = zeros(64, 64, 1, 33402)
     ytrn = zeros(33402)
@@ -295,11 +301,4 @@ preprocess_svhn("../proj/data/svhn/test/", "./data_preprocessed/test/" )
 
 # preprocess extra data
 preprocess_svhn("../proj/data/svhn/extra/", "./data_preprocessed/extra/" )
-=#
-
-#=
-for i = 1:10
-    preprocess_mnist_2("./modified_mnist_" * string(i) * ".jld2", outdim=44)
-    println("image set " * string(i) * " is done")
-end
 =#

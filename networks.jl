@@ -28,11 +28,11 @@ ClassificationNet(i::Int, o::Int) = ClassificationNet(Dense(i, hidden_size), Den
 GlimpseNet used in DRAM model
     ba et al 2015
 """
-struct GlimpseNetDRAM
+struct GlimpseNet_DRAM_SVHN
     imagechain::Chain
     locationlayer::Dense
 
-    GlimpseNetDRAM(weightsize, channelsize, outsize, patchsize) = (
+    GlimpseNet_DRAM_SVHN(weightsize, channelsize, outsize, patchsize) = (
     # calculate image dense layer size
     d = (patchsize .- sum(weightsize, dims=1) .+3);
     densein = d[1] * d[2] * channelsize[4];
@@ -46,18 +46,18 @@ struct GlimpseNetDRAM
     )
    
 end
-(g::GlimpseNetDRAM)(x, l) = g.imagechain(x) .* g.locationlayer(l)
+(g::GlimpseNet_DRAM_SVHN)(x, l) = g.imagechain(x) .* g.locationlayer(l)
 
 
 """
 GlimpseNet used in DRAM model for MNIST classification
     ba et al 2015
 """
-struct GlimpseNetDRAM_v1
+struct GlimpseNet_DRAM_MNIST
     imagelayer::Dense
     locationlayer::Dense
 
-    GlimpseNetDRAM_v1(patchwidth, channelsize, outsize) = (
+    GlimpseNet_DRAM_MNIST(patchwidth, channelsize, outsize) = (
       
         new(Dense(patchwidth*patchwidth*channelsize, outsize),      # for images
             Dense(2, outsize)                                       # for location
@@ -65,32 +65,55 @@ struct GlimpseNetDRAM_v1
     )
    
 end
-(g::GlimpseNetDRAM_v1)(x, l) = g.imagelayer(x) .* g.locationlayer(l)
+(g::GlimpseNet_DRAM_MNIST)(x, l) = g.imagelayer(x) .* g.locationlayer(l)
 
 
 """
 GlimpseNet used in RAM model
     mnih et al 2014
 """
-struct GlimpseNetRAM
+struct GlimpseNet_RAM
     denseglimpse::Dense
     denselocation::Dense
     densecommon::Dense
 
-    GlimpseNetRAM(patchwidth, channelsize) = (
+    GlimpseNet_RAM(patchwidth, channelsize) = (
         new(Dense(patchwidth*patchwidth*channelsize, 128),
             Dense(2, 128),
             Dense(256, 256)
         )
     )
 end
-(g::GlimpseNetRAM)(x, l) = g.densecommon(cat(g.denseglimpse(x), g.denselocation(l), dims=1))
+(g::GlimpseNet_RAM)(x, l) = g.densecommon(cat(g.denseglimpse(x), g.denselocation(l), dims=1))
 
 """
+Simple ContextNet composed of single dense layer
 """
-struct ContextNetDRAM_v1
+struct ContextNet_DRAM_v1
     dense::Dense
 
-    ContextNetDRAM_v1(insize, outsize) = new(Dense(insize, outsize))
+    ContextNet_DRAM_v1(insize, outsize) = new(Dense(insize, outsize))
 end
-(c::ContextNetDRAM_v1)(x) = c.dense(x)
+(c::ContextNet_DRAM_v1)(x) = c.dense(x)
+
+"""
+ContextNet used in DRAM model
+    ba et al 2015
+"""
+struct ContextNet_DRAM_v2
+    layerChain::Chain
+
+    ContextNet_DRAM_v2(weightsize, channelsize, outsize, imagesize) = (
+    # calculate image dense layer size
+    d = (imagesize .- sum(weightsize, dims=1) .+3);
+    densein = d[1] * d[2] * channelsize[4];
+    
+    new(Chain(
+        Conv(weightsize[1,1], weightsize[1,2], channelsize[1], channelsize[2]),
+        Conv(weightsize[2,1], weightsize[2,2], channelsize[2], channelsize[3]),
+        Conv(weightsize[3,1], weightsize[3,2], channelsize[3], channelsize[4]),
+        Dense(densein, outsize)))
+    )
+   
+end
+(c::ContextNet_DRAM_v2)(x, l) = c.chain(x)
