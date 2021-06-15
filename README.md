@@ -3,8 +3,11 @@
 Implementation of RAM (Mnih et al. 2014) and different versions of DRAM (Ba et al. 2015). The models are tested on original and modified versions of MNIST and SVHN datasets.
 
 3 versions of DRAM are implemented. 
+
 1st version has a simple context and glimpse networks optimized for MNIST addition task
+
 2nd version has more complicated context and glimpse networks that are optimized for MNIST addition task
+
 3rd version same as the 2nd version except optimized for multidigit classification of SVHN.
 
 References
