@@ -9,7 +9,6 @@ Configuration file for all the experiments.
     2 DRAM without context on sum of 2 MNIST digits
     3 DRAM with context on sum of 2 MNIST digits
     4 DRAM with context on SVHN recognition
-    5 Double DRAM on SVHN recognition
 """
 
 # common for all experiments
@@ -69,18 +68,8 @@ elseif experiment == 4
     const input_size                    = [64, 64]
     const wsize                         = [5 5; 3 3; 3 3]               # filter sizes of conv layers in glimpse network
     const csize                         = [numscales 64 64 128]         # channel sizes of conv layers in glimpse network
-elseif experiment == 5                  
-
-    const monte_carlo_sigma             = 0.03                          # standard dev in mc sampling
-    const unit_width_as_pixels          = 20                            # 1 in cartesian equal to this many pixels
-    const hidden_size                   = 1024
-    const downsamplingrate              = 4
-    const momentum                      = 0.9                           # momentum for nesterov
-    const lr                            = 0.1                           # learning rate
-    const lr_decay                      = 0.97                          # lr decays at each epoch exponentially
-    const rnn_hidden_size               = 512                           # number of lstm units
-    const wsize                         = [5 5; 3 3; 3 3]               # filter sizes of conv layers in glimpse network
-    const csize                         = [numscales 64 64 128]         # channel sizes of conv layers in glimpse network
+    const num_glimpses_per_digit        = 3
+    const terminal_label                = -1   
 else
     println("Experiment no: ", experiment)
     throw("Unknown experiment number, couldnt configurate.")
