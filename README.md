@@ -4,7 +4,7 @@ Implementation of RAM (Mnih et al. 2014) and different versions of DRAM (Ba et a
 
 3 versions of DRAM are implemented. 
 
-1st version has a simple context and glimpse networks optimized for MNIST addition task
+1st version has simpler context and glimpse networks optimized for MNIST addition task
 
 2nd version has more complicated context and glimpse networks that are optimized for MNIST addition task
 
